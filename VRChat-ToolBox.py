@@ -1,5 +1,5 @@
 # ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════#
-#                                              OSC ToolBox Script                                                      #
+#                                              Boot's ToolBox Script                                                      #
 # ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════#
 # Hi :3
 # Wellcome to my code
@@ -19,6 +19,176 @@ import tkinter.font as font
 import os
 import site
 import json
+import winreg
+import urllib.request
+import tempfile
+import shutil
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════#
+# PYTHON DETECTION & INSTALLATION
+# ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════#
+
+PYTHON_VERSION = "3.12.10"
+PYTHON_INSTALLER_URL = (
+    f"https://www.python.org/ftp/python/{PYTHON_VERSION}/"
+    f"python-{PYTHON_VERSION}-amd64.exe"
+)
+
+
+def _reg_find_python() -> str | None:
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        for subkey_root in (
+                r"SOFTWARE\Python\PythonCore",
+                r"SOFTWARE\WOW6432Node\Python\PythonCore",
+        ):
+            try:
+                with winreg.OpenKey(hive, subkey_root) as root:
+                    i = 0
+                    while True:
+                        try:
+                            ver_str = winreg.EnumKey(root, i)
+                            i += 1
+                            try:
+                                major, minor = int(ver_str.split(".")[0]), int(ver_str.split(".")[1])
+                            except Exception:
+                                continue
+                            if (major, minor) < (3, 10):
+                                continue
+                            install_path_key = f"{subkey_root}\\{ver_str}\\InstallPath"
+                            try:
+                                with winreg.OpenKey(hive, install_path_key) as ik:
+                                    path_val, _ = winreg.QueryValueEx(ik, "ExecutablePath")
+                                    if os.path.isfile(path_val):
+                                        return path_val
+                                    default_val, _ = winreg.QueryValueEx(ik, "")
+                                    candidate = os.path.join(default_val, "python.exe")
+                                    if os.path.isfile(candidate):
+                                        return candidate
+                            except FileNotFoundError:
+                                pass
+                        except OSError:
+                            break
+            except FileNotFoundError:
+                pass
+    return None
+
+
+def _which_python() -> str | None:
+    try:
+        result = subprocess.run(
+            ["py", "-3", "-c", "import sys; print(sys.executable)"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            path = result.stdout.strip()
+            if os.path.isfile(path):
+                return path
+    except Exception:
+        pass
+
+    try:
+        result = subprocess.run(["where", "python"], capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line and os.path.isfile(line) and "WindowsApps" not in line:
+                    return line
+    except Exception:
+        pass
+
+    return None
+
+
+def find_system_python() -> str | None:
+    path = _which_python() or _reg_find_python()
+    if path:
+        try:
+            result = subprocess.run(
+                [path, "-c", "import sys; v=sys.version_info; print(f'{v.major}.{v.minor}')"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                parts = result.stdout.strip().split(".")
+                if len(parts) >= 2 and (int(parts[0]), int(parts[1])) >= (3, 10):
+                    return path
+        except Exception:
+            pass
+    return None
+
+
+def _install_python_silent() -> str | None:
+    try:
+        print("[Python] Python 3.10+ not found, downloading installer...")
+        tmp_dir = tempfile.mkdtemp(prefix="toolbox_py_")
+        installer_path = os.path.join(tmp_dir, f"python-{PYTHON_VERSION}-amd64.exe")
+
+        print(f"[Python] Downloading from {PYTHON_INSTALLER_URL}")
+        urllib.request.urlretrieve(PYTHON_INSTALLER_URL, installer_path)
+
+        print("[Python] Running silent installation...")
+        result = subprocess.run([
+            installer_path,
+            "/quiet",
+            "InstallAllUsers=0",
+            "PrependPath=1",
+            "Include_pip=1",
+            "Include_launcher=1",
+            "SimpleInstall=1",
+        ], timeout=300)
+
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+        if result.returncode != 0:
+            print(f"[Python] Installation failed with code {result.returncode}")
+            return None
+
+        print("[Python] Installation complete, locating executable...")
+        python_exe = find_system_python()
+        if python_exe is None:
+            local_app = os.environ.get("LOCALAPPDATA", "")
+            candidate = os.path.join(
+                local_app, "Programs", "Python",
+                f"Python{PYTHON_VERSION.replace('.', '')[:3]}",
+                "python.exe"
+            )
+            if os.path.isfile(candidate):
+                python_exe = candidate
+
+        if python_exe:
+            print(f"[Python] Found installed Python at {python_exe}")
+            return python_exe
+        else:
+            print("[Python] Could not locate installed Python after installation")
+            return None
+
+    except Exception as e:
+        print(f"[Python] Installation failed: {e}")
+        return None
+
+
+def ensure_python() -> bool:
+    print("[Python] Checking for Python 3.10+...")
+    python_exe = find_system_python()
+
+    if python_exe:
+        print(f"[Python] Found: {python_exe}")
+        return True
+
+    print("[Python] Not found, attempting installation...")
+    python_exe = _install_python_silent()
+
+    if python_exe:
+        return True
+
+    messagebox.showerror(
+        "Python Required",
+        "Python 3.10+ is required but could not be found or installed.\n\n"
+        "Please install Python 3.10+ from python.org and try again."
+    )
+    return False
 
 
 def install_if_missing(package, import_name=None):
@@ -29,6 +199,10 @@ def install_if_missing(package, import_name=None):
         importlib.import_module(import_name)
     except ImportError:
         print(f"Installing {package}...")
+
+        if not ensure_python():
+            raise RuntimeError("Python is required to install packages")
+
         install_attempts = [
             [sys.executable, "-m", "pip", "install", package],
         ]
@@ -62,11 +236,18 @@ import requests
 # CONFIGURATION & GLOBAL VARIABLES
 # ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════#
 
-VERSION = "9.0.0"
+VERSION = "9.1.0"
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/CaptainBoots/VRChat-ToolBox/main/VRChat-ToolBox.py"
 GITHUB_BASE_URL = "https://raw.githubusercontent.com/CaptainBoots/VRChat-ToolBox/main/VRChat-Tools/"
+GITHUB_EXE_RELEASE_BASE_URL = "https://github.com/CaptainBoots/VRChat-ToolBox/main/VRChat-ToolBox.exe"
+GITHUB_EXE_RAW_BASE_URL = "https://raw.githubusercontent.com/CaptainBoots/VRChat-ToolBox/main/"
+DEFAULT_EXE_NAME = "VRChat-ToolBox.exe"
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, 'frozen', False):
+    SCRIPT_DIR = os.path.dirname(sys.executable)
+else:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 TOOLS_ROOT_DIR = os.path.join(SCRIPT_DIR, "VRChat-Tools")
 TOOLBOX_CONFIG_DIR = os.path.join(TOOLS_ROOT_DIR, "VRChat-Toolbox")
 TOOLBOX_CONFIG_FILE = os.path.join(TOOLBOX_CONFIG_DIR, "toolbox_config.json")
@@ -83,10 +264,11 @@ print(f"[Config] Config directory: {TOOLBOX_CONFIG_DIR}")
 print(f"[Config] Config file: {TOOLBOX_CONFIG_FILE}")
 
 DEFAULT_MANAGED_SCRIPTS = [
-    {"filename": "OSC-Router.py", "label": "Router"},
+    {"filename": "OSC-Router.py", "label": "Router(Beta)"},
     {"filename": "OSC-Chatbox.py", "label": "ChatBox"},
-    {"filename": "OSC-FaceTrackingController(Beta).py", "label": "Face Tracking Controller"},
+    {"filename": "OSC-FaceTrackingController(Beta).py", "label": "Face Tracking Controller(Beta)"},
 ]
+
 
 def load_managed_scripts():
     if os.path.exists(TOOLBOX_CONFIG_FILE):
@@ -98,7 +280,6 @@ def load_managed_scripts():
             print(f"[Config] Error loading config: {e}")
             return DEFAULT_MANAGED_SCRIPTS
 
-    # One-time migration for older versions that saved config in legacy paths
     for legacy_path in LEGACY_TOOLBOX_CONFIG_FILES:
         if not os.path.exists(legacy_path):
             continue
@@ -115,8 +296,8 @@ def load_managed_scripts():
     save_managed_scripts(DEFAULT_MANAGED_SCRIPTS)
     return DEFAULT_MANAGED_SCRIPTS
 
+
 def save_managed_scripts(scripts):
-    """Save managed scripts to config file"""
     try:
         os.makedirs(TOOLBOX_CONFIG_DIR, exist_ok=True)
         config = {"managed_scripts": scripts}
@@ -127,16 +308,20 @@ def save_managed_scripts(scripts):
         print(f"[Config] Error saving config: {e}")
         print(f"[Config] Attempted path: {TOOLBOX_CONFIG_FILE}")
 
+
 MANAGED_SCRIPTS = load_managed_scripts()
 
-
-print("OSC ToolBox")
+print("Boot's ToolBox")
 print("Made By Boots")
 print(f"Version {VERSION}")
 
 
 def rename_self_to_toolbox():
     try:
+        if getattr(sys, 'frozen', False):
+            print("[Rename] Running as frozen executable, skipping rename.")
+            return
+
         current_path = os.path.abspath(__file__)
         directory = os.path.dirname(current_path)
         new_name = "VRChat-ToolBox.py"
@@ -154,7 +339,6 @@ def rename_self_to_toolbox():
 
 rename_self_to_toolbox()
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TOOLS_ROOT_DIR = os.path.join(SCRIPT_DIR, "VRChat-Tools")
 TOOLBOX_CONFIG_DIR = os.path.join(TOOLS_ROOT_DIR, "VRChat-Toolbox")
 TOOLBOX_CONFIG_FILE = os.path.join(TOOLBOX_CONFIG_DIR, "toolbox_config.json")
@@ -166,8 +350,66 @@ SCRIPT_FOLDER_MAP = {
     "OSC-FaceTrackingController(Beta).py": "OSC-FaceTrackingController",
 }
 
-# Running process handles, keyed by filename
-_processes: dict[str, subprocess.Popen | None] = {}
+_cached_system_python: str | None = None
+
+
+def _load_python_cache() -> str | None:
+    try:
+        if os.path.exists(TOOLBOX_CONFIG_FILE):
+            with open(TOOLBOX_CONFIG_FILE, "r", encoding="utf-8") as f:
+                config = json.load(f)
+                python_path = config.get("cached_python_path")
+                if python_path and os.path.isfile(python_path):
+                    print(f"[Python] Loaded from cache: {python_path}")
+                    return python_path
+    except Exception as e:
+        print(f"[Python] Error loading cache: {e}")
+    return None
+
+
+def _save_python_cache(python_path: str) -> None:
+    try:
+        os.makedirs(TOOLBOX_CONFIG_DIR, exist_ok=True)
+        config = {}
+        if os.path.exists(TOOLBOX_CONFIG_FILE):
+            with open(TOOLBOX_CONFIG_FILE, "r", encoding="utf-8") as f:
+                config = json.load(f)
+        config["cached_python_path"] = python_path
+        with open(TOOLBOX_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+        print(f"[Python] Saved to cache: {python_path}")
+    except Exception as e:
+        print(f"[Python] Error saving cache: {e}")
+
+
+def _get_system_python() -> str | None:
+    global _cached_system_python
+
+    if _cached_system_python is not None:
+        return _cached_system_python
+
+    python_path = _load_python_cache()
+    if python_path:
+        try:
+            result = subprocess.run(
+                [python_path, "-c", "import sys; v=sys.version_info; exit(0 if (v.major, v.minor) >= (3, 10) else 1)"],
+                capture_output=True, timeout=5
+            )
+            if result.returncode == 0:
+                _cached_system_python = python_path
+                return _cached_system_python
+        except Exception:
+            pass
+        print("[Python] Cached path invalid, rechecking...")
+
+    print("[Python] Searching for Python...")
+    _cached_system_python = find_system_python()
+    if _cached_system_python:
+        _save_python_cache(_cached_system_python)
+    return _cached_system_python
+
+
+_processes: list[subprocess.Popen] = []
 
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════#
@@ -242,7 +484,6 @@ def _script_bundle_candidates(filename: str) -> list[str]:
 
 
 def _script_paths(filename: str) -> tuple[str, str]:
-    """Return (bundled_path, destination_path) for a managed script filename."""
     if _is_path_like(filename):
         dest_path = filename if os.path.isabs(filename) else os.path.join(SCRIPT_DIR, filename)
         dest_path = os.path.normpath(dest_path)
@@ -265,11 +506,6 @@ _migrate_legacy_layout()
 
 
 def ensure_script(filename: str, show_errors: bool = False) -> bool:
-    """
-    Make sure *filename* exists at its layout destination.
-    Tries: already present → download from GitHub → bundled copy.
-    Returns True if the script is ready to run.
-    """
     bundled_path, dest_path = _script_paths(filename)
 
     if os.path.isfile(dest_path):
@@ -327,10 +563,6 @@ def ensure_script(filename: str, show_errors: bool = False) -> bool:
 
 
 def check_for_script_updates(filename: str, silent: bool = False) -> bool:
-    """
-    Check GitHub for a newer version of *filename* and update if found.
-    Returns True if an update was applied.
-    """
     if not ensure_script(filename, show_errors=not silent):
         return False
 
@@ -386,42 +618,46 @@ def check_for_script_updates(filename: str, silent: bool = False) -> bool:
 
 
 def launch_script(filename: str) -> None:
-    """Launch *filename* as a subprocess, or warn if already running."""
     global _processes
 
     if not ensure_script(filename, show_errors=True):
         return
 
-    proc = _processes.get(filename)
-    if proc is not None and proc.poll() is None:
-        messagebox.showinfo(filename, f"{filename} is already running.")
-        return
-
-    # Get the label for this script
     script_label = next((s["label"] for s in MANAGED_SCRIPTS if s["filename"] == filename), filename)
 
     _, dest_path = _script_paths(filename)
     work_dir = os.path.dirname(dest_path)
     try:
         footer_label.config(text=f"Starting up ({script_label})")
-        
-        # Check if file is an executable
+
         if dest_path.lower().endswith('.exe'):
-            # Run .exe directly
-            _processes[filename] = subprocess.Popen(
+            proc = subprocess.Popen(
                 [dest_path],
                 cwd=work_dir,
             )
         else:
-            # Run Python scripts with Python interpreter
-            _processes[filename] = subprocess.Popen(
-                [sys.executable, dest_path],
+            if getattr(sys, 'frozen', False):
+                python_exe = _get_system_python()
+                if not python_exe:
+                    messagebox.showerror(
+                        f"{filename} Error",
+                        "Could not find Python interpreter to run script.\n"
+                        "Please ensure Python 3.10+ is installed."
+                    )
+                    return
+            else:
+                python_exe = sys.executable
+
+            proc = subprocess.Popen(
+                [python_exe, dest_path],
                 cwd=work_dir,
             )
-        # Reset status to "Ready" after 2 seconds
+
+        _processes.append(proc)
+        _processes[:] = [p for p in _processes if p.poll() is None]
+
         root.after(2000, _set_footer_ready, None)
     except Exception as e:
-        _processes[filename] = None
         footer_label.config(text="Error")
         messagebox.showerror(f"{filename} Error", f"Failed to start {filename}:\n{e}")
 
@@ -495,8 +731,162 @@ def get_remote_script_info() -> dict[str, str] | None:
     return None
 
 
+def _exe_update_urls() -> list[str]:
+    names = [DEFAULT_EXE_NAME]
+    if getattr(sys, "frozen", False):
+        names.append(os.path.basename(sys.executable))
+
+    unique_names: list[str] = []
+    for name in names:
+        if not name:
+            continue
+        cleaned = os.path.basename(name.strip())
+        if not cleaned.lower().endswith(".exe"):
+            continue
+        if cleaned not in unique_names:
+            unique_names.append(cleaned)
+
+    urls: list[str] = []
+    for exe_name in unique_names:
+        urls.append(f"{GITHUB_EXE_RELEASE_BASE_URL}{exe_name}")
+        urls.append(f"{GITHUB_EXE_RAW_BASE_URL}{exe_name}")
+    return urls
+
+
+def _download_latest_exe(timeout: int = 30) -> tuple[str | None, str | None]:
+    errors: list[str] = []
+    for url in _exe_update_urls():
+        temp_path = None
+        response = None
+        try:
+            response = requests.get(
+                url,
+                timeout=timeout,
+                stream=True,
+                params={"_": int(time.time())},
+                headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
+            )
+            response.raise_for_status()
+
+            fd, temp_path = tempfile.mkstemp(prefix="toolbox_update_", suffix=".exe", dir=tempfile.gettempdir())
+            os.close(fd)
+
+            with open(temp_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=1024 * 256):
+                    if chunk:
+                        f.write(chunk)
+            response.close()
+
+            if not os.path.isfile(temp_path) or os.path.getsize(temp_path) < 1024:
+                raise RuntimeError("Downloaded file is empty or too small.")
+
+            with open(temp_path, "rb") as f:
+                if f.read(2) != b"MZ":
+                    raise RuntimeError("Downloaded file is not a valid Windows executable.")
+
+            return temp_path, url
+        except Exception as e:
+            errors.append(f"{url} ({e})")
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            continue
+        finally:
+            if response is not None:
+                response.close()
+
+    print(f"[Updater] Could not download updated executable: {errors}")
+    return None, None
+
+
+def _write_exe_updater_script(target_exe: str, downloaded_exe: str, backup_exe: str) -> str:
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+
+    updater_script = os.path.join(BACKUP_DIR, "apply_toolbox_update.cmd")
+    script_body = (
+        "@echo off\n"
+        "setlocal enableextensions\n"
+        f'set "TARGET={target_exe}"\n'
+        f'set "DOWNLOAD={downloaded_exe}"\n'
+        f'set "BACKUP={backup_exe}"\n'
+        "\n"
+        "for /L %%I in (1,1,60) do (\n"
+        "    >nul 2>&1 move /Y \"%TARGET%\" \"%BACKUP%\" && goto moved\n"
+        "    timeout /t 1 /nobreak >nul\n"
+        ")\n"
+        "\n"
+        "echo [Updater] Could not unlock target executable.\n"
+        "del /f /q \"%DOWNLOAD%\" >nul 2>&1\n"
+        "exit /b 1\n"
+        "\n"
+        ":moved\n"
+        "move /Y \"%DOWNLOAD%\" \"%TARGET%\" >nul\n"
+        "if errorlevel 1 (\n"
+        "    move /Y \"%BACKUP%\" \"%TARGET%\" >nul\n"
+        "    exit /b 1\n"
+        ")\n"
+        "\n"
+        "start \"\" \"%TARGET%\"\n"
+        "del /f /q \"%BACKUP%\" >nul 2>&1\n"
+        "del /f /q \"%~f0\" >nul 2>&1\n"
+        "exit /b 0\n"
+    )
+
+    with open(updater_script, "w", encoding="utf-8") as f:
+        f.write(script_body)
+
+    return updater_script
+
+
+def _perform_exe_update() -> None:
+    if sys.platform != "win32":
+        messagebox.showerror("Update Failed", "EXE self-update is only supported on Windows.")
+        return
+
+    target_exe = os.path.abspath(sys.executable)
+    if not target_exe.lower().endswith(".exe"):
+        messagebox.showerror("Update Failed", "Could not determine executable path for update.")
+        return
+
+    downloaded_exe, source_url = _download_latest_exe(timeout=30)
+    if not downloaded_exe:
+        messagebox.showerror(
+            "Update Failed",
+            "Could not download the latest executable.\n"
+            "Make sure a new VRChat-ToolBox.exe is published on GitHub."
+        )
+        return
+
+    backup_exe = os.path.join(
+        BACKUP_DIR,
+        f"{os.path.splitext(os.path.basename(target_exe))[0]} {VERSION}.exe.bak"
+    )
+
+    try:
+        updater_script = _write_exe_updater_script(target_exe, downloaded_exe, backup_exe)
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(["cmd", "/c", updater_script], creationflags=creationflags)
+        print(f"[Updater] EXE update downloaded from {source_url}. Restarting...")
+        root.destroy()
+        sys.exit(0)
+    except Exception as e:
+        if os.path.exists(downloaded_exe):
+            try:
+                os.remove(downloaded_exe)
+            except OSError:
+                pass
+        messagebox.showerror("Update Failed", f"Could not start updater process:\n{e}")
+        print(f"[Updater] EXE update failed: {e}")
+
+
 def perform_update(remote_text=None, source_url=None):
     try:
+        if getattr(sys, 'frozen', False):
+            _perform_exe_update()
+            return
+
         if remote_text is None:
             info = get_remote_script_info()
             if not info:
@@ -625,11 +1015,10 @@ scalable_widgets = []
 square_widgets = []
 
 root = tk.Tk()
-root.title("OSC ToolBox")
+root.title("Boot's ToolBox")
 root.configure(bg=BG)
 root.resizable(True, True)
 
-# Header with title and version
 title_bar = tk.Frame(root, bg=PANEL, pady=14)
 title_bar.pack(fill="x")
 
@@ -638,7 +1027,7 @@ header_frame.pack(fill="x", padx=16, expand=True)
 
 header_title_label = tk.Label(
     header_frame,
-    text="◈  OSC TOOLBOX",
+    text="◈  Boot's TOOLBOX",
     bg=PANEL,
     fg=ACCENT2,
     font=(UI_FONT, 16, "bold")
@@ -656,7 +1045,6 @@ version_label.pack(side="right", anchor="e", padx=(32, 0))
 
 tk.Frame(root, bg=BORDER, height=1).pack(fill="x")
 
-# Main content frame with better padding
 main_frame = tk.Frame(root, bg=BG)
 main_frame.pack(fill="both", expand=True, padx=16, pady=14)
 
@@ -735,7 +1123,7 @@ def square_button(parent, text, command, base_size=32):
 
 def open_help():
     help_win = tk.Toplevel(root)
-    help_win.title("OSC ToolBox Tutorial")
+    help_win.title("Tutorial")
     help_win.configure(bg=BG)
     help_win.resizable(True, True)
 
@@ -750,8 +1138,8 @@ def open_help():
         {
             "title": "Welcome",
             "content": (
-                "OSC ToolBox — The main control center for\n"
-                "managing all OSC scripts.\n\n"
+                "Boot's ToolBox — The main control center for\n"
+                "managing all of Boot's scripts.\n\n"
                 "MANAGED SCRIPTS\n"
                 "Click any script button to launch it.\n\n"
                 "The footer at the bottom shows:\n"
@@ -764,14 +1152,14 @@ def open_help():
         {
             "title": "Available Scripts",
             "content": (
-                "▶ Router — Manages OSC routing\n"
+                "▶ Router(Beta) — Manages OSC routing\n"
                 "  Forwards OSC messages between sources\n"
                 "  and destinations.\n\n"
-                "▶ ChatBox — Sends data to VRChat\n"
+                "▶ ChatBox — Sends data to VRChat over OSC\n"
                 "  Displays system info, weather, music,\n"
                 "  and custom messages.\n\n"
-                "▶ Face Tracking Controller — Control\n"
-                "  face tracking features (Beta version)."
+                "▶ Face Tracking Controller(Beta) — Control\n"
+                "  face tracking features in VRChat ."
             )
         },
         {
@@ -844,33 +1232,32 @@ def open_help():
     content_panel = tk.Frame(help_win, bg=PANEL, highlightthickness=1, highlightbackground=BORDER)
     content_panel.pack(padx=20, pady=(14, 0), fill="both", expand=True)
 
-    content_text = tk.Label(
-        content_panel, text="", bg=PANEL, fg=TEXT, anchor="nw", justify="left",
-        font=(UI_FONT, 9), wraplength=400
+    content_label = tk.Label(
+        content_panel,
+        text="",
+        bg=PANEL, fg=TEXT,
+        justify="left",
+        wraplength=460,
+        anchor="nw",
+        font=(UI_FONT, 10)
     )
-    content_text.pack(padx=16, pady=16, fill="both", expand=True)
+    content_label.pack(padx=14, pady=14, fill="both", expand=True)
 
-    def show_page(page_num):
-        page = pages[page_num]
-        title_label.config(text=page["title"])
-        content_text.config(text=page["content"])
-        page_indicator.config(text=f"Page {page_num + 1} / {len(pages)}")
-        is_last = page_num == len(pages) - 1
+    def show_page(idx):
+        p = pages[idx]
+        title_label.config(text=p["title"])
+        content_label.config(text=p["content"])
+        page_indicator.config(text=f"Page {idx + 1} of {len(pages)}")
+        prev_btn.config(state="normal" if idx > 0 else "disabled")
+        is_last = idx == len(pages) - 1
         next_btn.config(text="Finish" if is_last else "Next →")
-
-    def next_or_finish():
-        if current_page[0] < len(pages) - 1:
-            current_page[0] += 1
-            show_page(current_page[0])
-        else:
-            help_win.destroy()
 
     nav_frame = tk.Frame(help_win, bg=BG)
     nav_frame.pack(fill="x", padx=20, pady=(0, 14))
     nav_frame.columnconfigure(1, weight=1)
 
     prev_btn = tk.Button(
-        nav_frame, text="← Back", bg=PANEL, fg=SUBTEXT, relief="flat", width=10,
+        nav_frame, text="← Back", bg=BTN_BG, fg=BTN_FG, relief="flat", width=10,
         command=lambda: (current_page.__setitem__(0, current_page[0] - 1),
                          show_page(current_page[0]))
     )
@@ -880,8 +1267,15 @@ def open_help():
         cursor="hand2", font=(UI_FONT, 9, "bold"),
     )
 
+    def next_or_finish():
+        if current_page[0] < len(pages) - 1:
+            current_page[0] += 1
+            show_page(current_page[0])
+        else:
+            help_win.destroy()
+
     next_btn = tk.Button(
-        nav_frame, text="Next →", bg=PANEL, fg=SUBTEXT, relief="flat", width=10,
+        nav_frame, text="Next →", bg=BTN_BG, fg=BTN_FG, relief="flat", width=10,
         command=next_or_finish
     )
     next_btn.grid(row=0, column=2, sticky="e")
@@ -895,7 +1289,7 @@ def open_help():
 
 def open_settings():
     global MANAGED_SCRIPTS
-    
+
     settings_win = tk.Toplevel(root)
     settings_win.title("Settings")
     settings_win.configure(bg=BG)
@@ -924,7 +1318,7 @@ def open_settings():
     inner_canvas = tk.Canvas(content_panel, bg=PANEL, highlightthickness=0)
     scrollbar = tk.Scrollbar(content_panel, orient="vertical", command=inner_canvas.yview)
     inner_canvas.configure(yscrollcommand=scrollbar.set)
-    
+
     scrollbar.pack(side="right", fill="y")
     inner_canvas.pack(side="left", fill="both", expand=True)
 
@@ -939,18 +1333,22 @@ def open_settings():
     def refresh_script_list():
         for widget in inner_frame.winfo_children():
             widget.destroy()
-        
+
         for idx, script in enumerate(MANAGED_SCRIPTS):
             script_row = tk.Frame(inner_frame, bg=BG)
             script_row.pack(fill="x", padx=10, pady=6)
 
-            tk.Label(script_row, text=f"{script['label']}", bg=BG, fg=TEXT, font=(UI_FONT, 9, "bold")).pack(side="left", fill="x", expand=True)
-            tk.Label(script_row, text=f"({script['filename']})", bg=BG, fg=SUBTEXT, font=(UI_FONT, 8)).pack(side="left", padx=(10, 0))
+            tk.Label(script_row, text=f"{script['label']}", bg=BG, fg=TEXT, font=(UI_FONT, 9, "bold")).pack(side="left",
+                                                                                                            fill="x",
+                                                                                                            expand=True)
+            tk.Label(script_row, text=f"({script['filename']})", bg=BG, fg=SUBTEXT, font=(UI_FONT, 8)).pack(side="left",
+                                                                                                            padx=(10,
+                                                                                                                  0))
 
             remove_btn = tk.Button(
-                script_row, 
-                text="✕ Remove", 
-                bg=PANEL, 
+                script_row,
+                text="✕ Remove",
+                bg=PANEL,
                 fg=RED,
                 relief="flat",
                 font=(UI_FONT, 8, "bold"),
@@ -973,12 +1371,16 @@ def open_settings():
         add_win.geometry("400x200")
         add_win.resizable(False, False)
 
-        tk.Label(add_win, text="Script Label:", bg=BG, fg=TEXT, font=(UI_FONT, 9)).pack(pady=(10, 0), padx=10, anchor="w")
-        label_entry = tk.Entry(add_win, bg=PANEL, fg=TEXT, font=(UI_FONT, 9), relief="flat", insertbackground=ACCENT, highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT)
+        tk.Label(add_win, text="Script Label:", bg=BG, fg=TEXT, font=(UI_FONT, 9)).pack(pady=(10, 0), padx=10,
+                                                                                        anchor="w")
+        label_entry = tk.Entry(add_win, bg=PANEL, fg=TEXT, font=(UI_FONT, 9), relief="flat", insertbackground=ACCENT,
+                               highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT)
         label_entry.pack(pady=(0, 10), padx=10, fill="x")
 
-        tk.Label(add_win, text="Filename/Path:", bg=BG, fg=TEXT, font=(UI_FONT, 9)).pack(pady=(10, 0), padx=10, anchor="w")
-        file_entry = tk.Entry(add_win, bg=PANEL, fg=TEXT, font=(UI_FONT, 9), relief="flat", insertbackground=ACCENT, highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT)
+        tk.Label(add_win, text="Filename/Path:", bg=BG, fg=TEXT, font=(UI_FONT, 9)).pack(pady=(10, 0), padx=10,
+                                                                                         anchor="w")
+        file_entry = tk.Entry(add_win, bg=PANEL, fg=TEXT, font=(UI_FONT, 9), relief="flat", insertbackground=ACCENT,
+                              highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT)
         file_entry.pack(pady=(0, 20), padx=10, fill="x")
 
         def save_new_script():
@@ -995,7 +1397,7 @@ def open_settings():
         btn_frame.pack(pady=10)
 
         tk.Button(
-            btn_frame, text="Add", bg=ACCENT, fg="#FFFFFF", relief="flat", 
+            btn_frame, text="Add", bg=ACCENT, fg="#FFFFFF", relief="flat",
             font=(UI_FONT, 9, "bold"), cursor="hand2",
             activebackground=ACCENT2, activeforeground="#FFFFFF",
             command=save_new_script
@@ -1053,13 +1455,13 @@ bottom_bar.columnconfigure(0, weight=1)
 
 script_buttons = {}
 
+
 def refresh_main_buttons():
-    """Refresh the script buttons in the main window"""
     global script_buttons
     for btn in script_buttons.values():
         btn.destroy()
     script_buttons.clear()
-    
+
     for i, entry in enumerate(MANAGED_SCRIPTS):
         script_filename = entry["filename"]
         label = entry["label"]
@@ -1080,10 +1482,11 @@ def refresh_main_buttons():
         )
         btn.grid(row=i, column=0, padx=0, pady=4, sticky="ew")
         script_buttons[i] = btn
-    
+
     btn_count = len(MANAGED_SCRIPTS)
     root.geometry(f"580x{520 + btn_count * 52}")
     root.minsize(540, 450 + btn_count * 52)
+
 
 refresh_main_buttons()
 
